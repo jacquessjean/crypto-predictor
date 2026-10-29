@@ -23,6 +23,8 @@ VAL_START = pd.Timestamp("2024-10-01") # one cutoff for every pair: no cross-ass
 TEST_START = pd.Timestamp("2025-07-01")
 
 FEATURES = [
+    "symbol=BTCUSDT", "symbol=ETHUSDT", "symbol=BNBUSDT", "symbol=XRPUSDT", "symbol=ADAUSDT",
+    "symbol=DOGEUSDT", "symbol=SOLUSDT", "symbol=LTCUSDT", "symbol=LINKUSDT", "symbol=AVAXUSDT",
     "returns", "volatility", "upper_wick", "lower_wick", "body_ratio",
     "taker_buy_ratio", "taker_buy_ratio_16", "relative_volume", "normalized_volatility",
     "rel_trade_size", "ret_4", "ret_16", "ret_96", "ret_672", "vol_96",
@@ -30,6 +32,8 @@ FEATURES = [
     "hour_sin", "hour_cos", "dow_sin", "dow_cos",
     "btc_ret_4", "btc_ret_16", "rel_ret_4",
 ]
+SYMBOL_FEATURES = [f"symbol={sym}" for sym in SYMBOLS]
+NUMERIC_FEATURES = [f for f in FEATURES if f not in SYMBOL_FEATURES]
 
 
 def _month_zip(sym: str, month: str) -> Path | None:
@@ -112,6 +116,8 @@ def add_market_features(df: pd.DataFrame) -> pd.DataFrame:
     btc = df.loc[df["symbol"] == "BTCUSDT", ["open_time", "ret_4", "ret_16"]]
     df = df.merge(btc.rename(columns={"ret_4": "btc_ret_4", "ret_16": "btc_ret_16"}), on="open_time", how="left")
     df["rel_ret_4"] = df["ret_4"] - df["btc_ret_4"]
+    for sym in SYMBOLS:
+        df[f"symbol={sym}"] = (df["symbol"] == sym).astype("int8")
     return df
 
 
@@ -135,13 +141,14 @@ def build() -> None:
 
     df = df[df["label"] != -1]
     train = df[df["split"] == "train"]
-    lo, hi = train[FEATURES].quantile(0.001), train[FEATURES].quantile(0.999)  # fitted on train only
-    clipped = train[FEATURES].clip(lo, hi, axis=1)
+    lo, hi = train[NUMERIC_FEATURES].quantile(0.001), train[NUMERIC_FEATURES].quantile(0.999)  # fitted on train only
+    clipped = train[NUMERIC_FEATURES].clip(lo, hi, axis=1)
     mean, std = clipped.mean(), clipped.std()
     json.dump({"clip_low": lo.to_dict(), "clip_high": hi.to_dict(), "mean": mean.to_dict(), "std": std.to_dict(),
-               "features": FEATURES, "horizon": HORIZON, "delta": DELTA}, open(OUT / "scaler.json", "w"), indent=1)
-    df[FEATURES] = (df[FEATURES].clip(lo, hi, axis=1) - mean) / std
-    df = df[["open_time", "symbol"] + FEATURES + ["label", "split"]]
+               "features": FEATURES, "numeric_features": NUMERIC_FEATURES,
+               "horizon": HORIZON, "delta": DELTA}, open(OUT / "scaler.json", "w"), indent=1)
+    df[NUMERIC_FEATURES] = (df[NUMERIC_FEATURES].clip(lo, hi, axis=1) - mean) / std
+    df = df[["open_time"] + FEATURES + ["label", "split"]]
     for name, part in df.groupby("split"):
         part.drop(columns="split").to_parquet(OUT / f"{name}.parquet", index=False)
         print(name, len(part), f"up share {part['label'].mean():.3f}")
