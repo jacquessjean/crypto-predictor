@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -10,7 +11,7 @@ from .binance import (
     fetch_pair_klines,
     get_latest_closed_15m_bar,
 )
-from .config import HORIZON_SECONDS, SUPPORTED_PAIRS, settings
+from .config import BAR_SECONDS, HORIZON_SECONDS, SUPPORTED_PAIRS, settings
 from .db import (
     get_prediction_by_bar,
     get_stats,
@@ -96,18 +97,26 @@ def post_predict(body: PredictRequest) -> dict:
     now = datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
 
+    # The bar we score is the latest CLOSED 15m bar, known from the clock alone. Check the
+    # database first so repeat requests within the same bar never touch Binance.
+    bar_ms = BAR_SECONDS * 1000
+    boundary_ms = now_ms // bar_ms * bar_ms          # open of the current (still forming) bar
+    bar_time_iso = datetime.fromtimestamp(
+        (boundary_ms - bar_ms) / 1000, tz=timezone.utc
+    ).isoformat()
+    cached = get_prediction_by_bar(pair, bar_time_iso)
+    if cached is not None:
+        return cached
+
+    # Cache miss: fetch klines only up to the bar boundary, so every request in the same bar
+    # asks Binance for the same window (and the forming bar is never included).
     try:
-        klines_map = fetch_pair_klines(pair, end_time=now_ms)
+        klines_map = fetch_pair_klines(pair, end_time=boundary_ms)
         bar_time_iso, bar_close_ms, entry_price = get_latest_closed_15m_bar(
             klines_map[pair], pair, now_ms=now_ms
         )
     except (BinanceRestError, LiveFeatureError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    # Return cached prediction if this closed bar was already scored
-    cached = get_prediction_by_bar(pair, bar_time_iso)
-    if cached is not None:
-        return cached
 
     # Compute the 36-column feature vector using the shared training pipeline
     try:
@@ -143,6 +152,8 @@ def post_predict(body: PredictRequest) -> dict:
         "entry_price": entry_price,
         "model_version": model_out["model_version"],
         "schema_version": model_out["schema_version"],
+        # kept so resolved predictions can later be used as new training samples
+        "features_json": json.dumps(features),
     }
     return insert_prediction(record)
 

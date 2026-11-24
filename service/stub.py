@@ -44,4 +44,4 @@ def predict(payload: dict[str, Any]) -> dict[str, float | str]:
     ][seed % 3]
     p_up, p_flat, p_down = probabilities
     return {"p_up": p_up, "p_flat": p_flat, "p_down": p_down,
-            "action": action, "model_version": "v1"}
+            "action": action, "model_version": "v1", "schema_version": "1"}

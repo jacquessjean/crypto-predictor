@@ -275,6 +275,8 @@ def _klines_frame(
     else:
         current_minute = now_ms // _OPEN_BAR_MARGIN_MS * _OPEN_BAR_MARGIN_MS
         frame = frame[frame["open_time"] < current_minute]
+        
+    frame = frame[frame["open_time"] < now_ms // 900_000 * 900_000]
 
     if frame.empty:
         raise LiveFeatureError(f"{symbol} has no closed 1-minute bars")

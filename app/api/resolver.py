@@ -22,14 +22,14 @@ def evaluate_outcome(
     else:
         net_return = 0.0
 
-    if abs(realized_return) <= ROUND_TRIP_FEE:
+    if action not in ("BUY", "SELL"):
+        status = "neutral"  # WAIT is not a trade: nothing to be right or wrong about
+    elif abs(realized_return) <= ROUND_TRIP_FEE:
         status = "flat"
     elif action == "BUY":
         status = "correct" if realized_return > ROUND_TRIP_FEE else "incorrect"
-    elif action == "SELL":
+    else:  # SELL
         status = "correct" if realized_return < -ROUND_TRIP_FEE else "incorrect"
-    else:
-        status = "incorrect"
 
     return realized_return, net_return, status
 

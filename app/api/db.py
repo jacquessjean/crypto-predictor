@@ -56,9 +56,18 @@ def init_db(db_path: str | None = None) -> None:
                 realized_return REAL,
                 net_return REAL,
                 resolved_at TEXT,
+                features_json TEXT,
                 UNIQUE(pair, bar_time)
             );
             """
+        )
+        # Migrate databases created before features_json existed (CREATE IF NOT EXISTS won't add it).
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(predictions)")}
+        if "features_json" not in columns:
+            conn.execute("ALTER TABLE predictions ADD COLUMN features_json TEXT")
+        # WAIT is not a trade, so it has no right/wrong outcome (older rows were marked 'incorrect').
+        conn.execute(
+            "UPDATE predictions SET status = 'neutral' WHERE action = 'WAIT' AND status != 'pending'"
         )
         conn.execute(
             """
@@ -80,6 +89,7 @@ def get_prediction_by_bar(
 
 
 def insert_prediction(record: dict, db_path: str | None = None) -> dict:
+    record = {"features_json": None, **record}
     with get_conn(db_path) as conn:
         try:
             cursor = conn.execute(
@@ -87,11 +97,11 @@ def insert_prediction(record: dict, db_path: str | None = None) -> dict:
                 INSERT INTO predictions (
                     pair, request_time, bar_time, bar_close_ms,
                     expires_at, expires_at_ms, p_up, p_flat, p_down,
-                    action, entry_price, model_version, schema_version, status
+                    action, entry_price, model_version, schema_version, features_json, status
                 ) VALUES (
                     :pair, :request_time, :bar_time, :bar_close_ms,
                     :expires_at, :expires_at_ms, :p_up, :p_flat, :p_down,
-                    :action, :entry_price, :model_version, :schema_version, 'pending'
+                    :action, :entry_price, :model_version, :schema_version, :features_json, 'pending'
                 )
                 """,
                 record,
@@ -237,7 +247,8 @@ def get_stats(db_path: str | None = None) -> dict:
                     "total": data["total"],
                     "resolved": resolved,
                     "profitable_count": profitable,
-                    "win_rate": (profitable / resolved) if resolved > 0 else None,
+                    # WAIT is not a trade, so a win rate is meaningless for it
+                    "win_rate": (profitable / resolved) if (resolved > 0 and act != "WAIT") else None,
                     "avg_net_return": data["avg_net_return"],
                     "avg_realized_return": data["avg_realized_return"],
                 }

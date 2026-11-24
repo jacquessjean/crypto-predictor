@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 ActionType = Literal["BUY", "SELL", "WAIT"]
-OutcomeStatus = Literal["pending", "correct", "incorrect", "flat"]
+OutcomeStatus = Literal["pending", "correct", "incorrect", "flat", "neutral"]
 
 
 class PredictRequest(BaseModel):
