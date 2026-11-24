@@ -1,9 +1,11 @@
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 
 from .binance import (
     BinanceRestError,
@@ -172,3 +174,10 @@ def get_predictions(
 def get_prediction_stats() -> dict:
     """Return aggregate accuracy and net return after fees across resolved predictions."""
     return get_stats()
+
+
+# Serve the web client from the same origin so `uvicorn` alone gives a working app. This mount is
+# registered last so it never shadows /api/*. Behind nginx (Docker) the same folder is served by nginx.
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

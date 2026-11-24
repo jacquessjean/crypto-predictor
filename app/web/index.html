@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Predictor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Crypto Predictor</h1>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" id="tab-predict" aria-controls="view-predict" aria-selected="true" data-tab="predict">Predict</button>
+      <button role="tab" id="tab-history" aria-controls="view-history" aria-selected="false" data-tab="history">History</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===== Predict ===== -->
+    <section id="view-predict" role="tabpanel" aria-labelledby="tab-predict">
+      <div class="controls">
+        <label for="pair">Pair</label>
+        <select id="pair" disabled><option>Loading…</option></select>
+        <button id="predict-btn" class="primary" disabled>Predict</button>
+      </div>
+
+      <div class="grid">
+        <div class="card chart-card">
+          <div class="card-head">
+            <h2 id="chart-title">Chart</h2>
+            <span id="chart-last" class="muted"></span>
+          </div>
+          <div id="chart" role="img" aria-label="Candlestick chart"></div>
+          <p id="chart-msg" class="muted" hidden></p>
+        </div>
+
+        <div class="side">
+          <div class="card result-card" id="result" aria-live="polite"></div>
+          <div class="card watch-card" id="watch" aria-live="polite" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== History ===== -->
+    <section id="view-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <div class="stats" id="stats"></div>
+      <div class="controls">
+        <label for="history-pair">Show</label>
+        <select id="history-pair"><option value="">All pairs</option></select>
+        <button id="history-refresh">Refresh</button>
+      </div>
+      <p id="history-msg" class="muted" hidden></p>
+      <div class="table-wrap">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th>Bar closed</th><th>Pair</th><th>Action</th>
+              <th title="Probability of up / flat / down">Up / Flat / Down</th>
+              <th>Entry</th><th>Exit</th><th title="After the 0.2% round-trip fee">Net return</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>Educational project · not financial advice</footer>
+  <script src="app.js" defer></script>
+</body>
+</html>
