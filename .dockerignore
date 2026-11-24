@@ -1,0 +1,13 @@
+*
+!app/
+!app/api/
+!app/api/*.py
+!app/web/
+!app/web/*.html
+!app/web/*.js
+!app/web/*.css
+!app/web/*.conf
+!service/
+!service/stub.py
+!src/
+!src/cleanup.py

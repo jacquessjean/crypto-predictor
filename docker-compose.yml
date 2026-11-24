@@ -1,0 +1,43 @@
+name: crypto-predictor
+
+services:
+  web:
+    build: ./app/web
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+    networks: [front]
+
+  api:
+    build:
+      context: .
+      dockerfile: app/api/Dockerfile
+    environment:
+      MODEL_URL: http://model:8001  # POST /v1/predict
+      DB_PATH: /app/appdata/predictions.db
+    volumes:
+      - api_data:/app/appdata
+    depends_on:
+      model:
+        condition: service_healthy
+    networks: [front, back]  # front: web + outbound internet; back: the model
+
+  model:
+    build:
+      context: .
+      dockerfile: service/Dockerfile
+    networks: [back]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  front: {}
+  back:
+    internal: true  # no route to the host or the internet: only the api can reach the model
+
+volumes:
+  api_data: {}
