@@ -1,13 +1,23 @@
 import { useEffect, useState } from "react";
 import { friendlyError } from "./api.js";
-import { EXPLAIN, FEE_PCT, BAR_MS, WEAK_SIGNAL_NOTE, fmtPct, fmtPrice, fmtTime, minutesLeft } from "./utils.js";
+import { EXPLAIN, FEE_PCT, BAR_MS, WEAK_SIGNAL_NOTE, fmtPct, fmtPrice, fmtTime, minutesLeft, cap } from "./utils.js";
 
-function ProbRow({ label, cls, value }) {
+function Probs({ pred }) {
+  const rows = [
+    ["up", `Up (> +${FEE_PCT}%)`, pred.p_up],
+    ["flat", `Flat (±${FEE_PCT}%)`, pred.p_flat],
+    ["down", `Down (< −${FEE_PCT}%)`, pred.p_down],
+  ];
   return (
-    <div className="prob">
-      <span>{label}</span>
-      <div className="track"><div className={`fill ${cls}`} style={{ width: `${(value * 100).toFixed(1)}%` }} /></div>
-      <span className="pct">{fmtPct(value)}</span>
+    <div className="probs">
+      <div className="stack" role="img" aria-label={rows.map(([, l, v]) => `${l} ${fmtPct(v)}`).join(", ")}>
+        {rows.map(([cls, , v]) => <span key={cls} className={cls} style={{ flexGrow: v }} />)}
+      </div>
+      <ul className="legend">
+        {rows.map(([cls, l, v]) => (
+          <li key={cls}><i className={cls} /><span>{l}</span><b>{fmtPct(v)}</b></li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -29,13 +39,9 @@ function Prediction({ pred, watching, onWatch }) {
   return (
     <>
       <div className="head-line"><span>{pred.pair}</span><span>{`data up to ${fmtTime(barClose)}`}</span></div>
-      <div className={`action ${pred.action}`}>{pred.action}</div>
+      <div className={`action ${pred.action}`}>{cap(pred.action)}</div>
       <p className="explain">{EXPLAIN[pred.action]}</p>
-      <div className="probs">
-        <ProbRow label={`Up (> +${FEE_PCT}%)`} cls="up" value={pred.p_up} />
-        <ProbRow label={`Flat (±${FEE_PCT}%)`} cls="flat" value={pred.p_flat} />
-        <ProbRow label={`Down (< −${FEE_PCT}%)`} cls="down" value={pred.p_down} />
-      </div>
+      <Probs pred={pred} />
       <dl className="meta">
         <dt>Price at signal</dt><dd>{fmtPrice(pred.entry_price)}</dd>
         <dt>Advice expires</dt><Expiry expiresAt={expiresAt} />

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { getCandles, friendlyError } from "./api.js";
-import { CHART_LIMIT, fmtDateTime, fmtPrice, fmtTime } from "./utils.js";
+import { CHART_LIMIT, fmtPrice, fmtRet, fmtTime, retClass } from "./utils.js";
 
 /* Candlestick chart drawn as SVG. `marker` = { barOpen, price } marks the scored bar and entry price. */
-function Candles({ candles, marker, width }) {
+function Candles({ candles, marker, width, hover, setHover }) {
   const W = Math.max(320, Math.min(900, width || 800));   // 1 SVG unit = 1 CSS pixel
   const H = W < 520 ? 260 : 320;
   const padL = 8, padR = 70, padT = 10, padB = 24;
@@ -22,7 +22,16 @@ function Candles({ candles, marker, width }) {
   const markerIdx = marker ? candles.findIndex((c) => c.open_time === marker.barOpen) : -1;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="xMidYMid meet"
+      onPointerMove={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        const i = Math.floor(((e.clientX - r.left) * (W / r.width) - padL) / step);
+        setHover(i >= 0 && i < candles.length ? i : null);
+      }}
+      onPointerLeave={() => setHover(null)}
+    >
       {[0, 1, 2, 3, 4].map((k) => {
         const value = min + ((max - min) * k) / 4;
         return (
@@ -58,14 +67,13 @@ function Candles({ candles, marker, width }) {
             width={bodyW}
             height={Math.max(1, Math.abs(y(c.open) - y(c.close)))}
           />
-          <title>
-            {`${fmtDateTime(c.open_time)}\nO ${fmtPrice(c.open)}  H ${fmtPrice(c.high)}\nL ${fmtPrice(c.low)}  C ${fmtPrice(c.close)}`}
-          </title>
         </g>
       ))}
 
       <line className="last-line" x1={padL} x2={W - padR} y1={y(lastClose)} y2={y(lastClose)} />
-      <text className="last-tag" x={W - padR + 6} y={y(lastClose) - 5}>{fmtPrice(lastClose)}</text>
+      {hover != null && <line className="crosshair" x1={x(hover)} x2={x(hover)} y1={padT} y2={H - padB} />}
+      <rect className="last-chip" x={W - padR + 2} y={y(lastClose) - 9} width={padR - 4} height={18} />
+      <text className="last-tag" x={W - padR + 6} y={y(lastClose) + 4}>{fmtPrice(lastClose)}</text>
     </svg>
   );
 }
@@ -74,6 +82,7 @@ export default function Chart({ pair, marker, refreshKey }) {
   const [candles, setCandles] = useState([]);
   const [message, setMessage] = useState("");
   const [width, setWidth] = useState(0);
+  const [hover, setHover] = useState(null);
   const hostRef = useRef(null);
 
   // keep the chart sharp when the container changes size
@@ -108,14 +117,22 @@ export default function Chart({ pair, marker, refreshKey }) {
   }, [pair, refreshKey]);
 
   const last = candles[candles.length - 1];
+  const c = candles[hover ?? candles.length - 1];
   return (
     <div className="card chart-card">
       <div className="card-head">
-        <h2>{pair ? `${pair} · 15-minute candles, last 24 h` : "Chart"}</h2>
-        <span className="muted">{last ? `last ${fmtPrice(last.close)}` : ""}</span>
+        <h2>{pair ? `${pair}, 15-minute candles, last 24 h` : "Chart"}</h2>
+        {c && (
+          <span className="ohlc" aria-live="off">
+            <span>O {fmtPrice(c.open)}</span><span>H {fmtPrice(c.high)}</span>
+            <span>L {fmtPrice(c.low)}</span><span>C {fmtPrice(c.close)}</span>
+            <b className={retClass(c.close - c.open)}>{fmtRet((c.close - c.open) / c.open)}</b>
+            <time>{fmtTime(c.open_time)}</time>
+          </span>
+        )}
       </div>
       <div id="chart" role="img" aria-label="Candlestick chart" ref={hostRef}>
-        {candles.length > 0 && <Candles candles={candles} marker={marker} width={width} />}
+        {candles.length > 0 && <Candles candles={candles} marker={marker} width={width} hover={hover} setHover={setHover} />}
       </div>
       {message && <p className="muted">{message}</p>}
     </div>

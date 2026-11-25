@@ -9,6 +9,7 @@ export const WEAK_SIGNAL_NOTE =
 export const fmtTime = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 export const fmtDateTime = (t) =>
   new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+export const cap = (s) => s.charAt(0) + s.slice(1).toLowerCase();
 export const fmtPct = (p) => `${(p * 100).toFixed(1)}%`;
 export const fmtRet = (r) => (r == null ? "—" : `${r >= 0 ? "+" : ""}${(r * 100).toFixed(2)}%`);
 export const retClass = (r) => (r == null || r === 0 ? "" : r > 0 ? "pos" : "neg");

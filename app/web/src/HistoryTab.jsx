@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getPredictions, getStats, friendlyError } from "./api.js";
 import {
-  BAR_MS, FEE_PCT, STATUS_LABEL, fmtDateTime, fmtPrice, fmtRet, retClass,
+  BAR_MS, FEE_PCT, STATUS_LABEL, fmtDateTime, fmtPrice, fmtRet, retClass, cap,
 } from "./utils.js";
 
 function Stat({ label, value, sub, cls = "" }) {
@@ -86,7 +86,7 @@ export default function HistoryTab({ pairs }) {
               <tr key={p.id}>
                 <td>{fmtDateTime(Date.parse(p.bar_time) + BAR_MS)}</td>
                 <td>{p.pair}</td>
-                <td className={`act-${p.action}`}>{p.action}</td>
+                <td className={`act-${p.action}`}>{cap(p.action)}</td>
                 <td className="num">{`${(p.p_up * 100).toFixed(0)} / ${(p.p_flat * 100).toFixed(0)} / ${(p.p_down * 100).toFixed(0)} %`}</td>
                 <td className="num">{fmtPrice(p.entry_price)}</td>
                 <td className="num">{fmtPrice(p.exit_price)}</td>

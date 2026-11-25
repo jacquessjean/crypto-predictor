@@ -121,10 +121,15 @@ export default function App() {
   const marker = shown ? { barOpen: Date.parse(shown.bar_time), price: shown.entry_price } : null;
   const watching = watchActive && watchPair === last?.pair;
 
+  useEffect(() => { document.documentElement.dataset.signal = shown ? shown.action : "none"; }, [shown]);
+
   return (
     <>
       <header className="topbar">
-        <h1>Crypto Predictor</h1>
+        <h1>
+          <svg className="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="4" height="9" rx="1.5" /><rect x="10" y="4" width="4" height="16" rx="1.5" /><rect x="17" y="8" width="4" height="12" rx="1.5" /></svg>
+          Crypto Predictor
+        </h1>
         <nav className="tabs" role="tablist" aria-label="Sections">
           {["predict", "history"].map((name) => (
             <button
@@ -173,7 +178,7 @@ export default function App() {
         {tab === "history" && <HistoryTab pairs={pairs} />}
       </main>
 
-      <footer>Educational project · not financial advice</footer>
+      <footer>Educational project. Not financial advice.</footer>
     </>
   );
 }
