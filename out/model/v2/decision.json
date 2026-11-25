@@ -1,0 +1,23 @@
+{
+ "classes": [
+  -1,
+  0,
+  1
+ ],
+ "means": {
+  "-1": 8.495275498973418e-06,
+  "0": -0.009108926029623099,
+  "1": 0.009204062423449972
+ },
+ "fee": 0.002,
+ "buy_margin": 0.0008767440721067214,
+ "sell_margin": 0.0,
+ "sell_enabled": false,
+ "early_exit": false,
+ "horizon_minutes": 60,
+ "model": "random_forest",
+ "criterion": "log_loss",
+ "variant": "drop_weak+size",
+ "calibration": "sigmoid",
+ "margin_rule": "tuned on non-overlapping val-A trades, at least 100 trades"
+}

@@ -59,6 +59,29 @@ def test_health_reports_versions():
         return
     body = client.get("/health").json()
     assert body["status"] == "ok" and body["schema_version"] == "1" and body["model_version"]
+    assert body["horizon_minutes"] == 60  # v1 has no horizon in decision.json: one hour
+
+
+def test_predict_reports_horizon():
+    client = _client()
+    if client is None:
+        return
+    row = _row()
+    out = client.post("/v1/predict", json={"features": {f: float(row[f]) for f in FEATURES}}).json()
+    assert out["horizon_minutes"] == 60
+
+
+def test_service_serves_v2_horizon():
+    import subprocess
+
+    v2 = MODEL_DIR.parent / "v2"
+    if not (v2 / "model.pkl").exists():
+        print("skipped: no v2 artifact")
+        return
+    code = "import model_service as m; print(m.HORIZON_MINUTES, m.decision.get('sell_enabled'))"
+    env = {**os.environ, "MODEL_DIR": str(v2), "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), str(Path(__file__).parents[1] / "service")])}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout.split()
+    assert out == ["60", "False"]
 
 
 if __name__ == "__main__":

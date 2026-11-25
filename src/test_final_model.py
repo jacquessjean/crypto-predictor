@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from final_model import FEE, decide, random_baseline, expected_net, recency_weights, signal_stats, simulate_exit, tune_margin
+from final_model import FEE, decide, embargo, horizon_return, random_baseline, three_class, tune_margin_trades, expected_net, recency_weights, signal_stats, simulate_exit, tune_margin
 
 PROBA = np.array([[0.2, 0.3, 0.5]])
 CLASSES = [1, -1, 0]  # deliberately not the sorted order: columns must be read through classes
@@ -60,6 +60,38 @@ def test_random_baseline():
     assert math.isclose(random_baseline(fwd, "sell"), 0.01 - FEE)
 
 
+def test_horizon_return_needs_exact_bar():
+    df = pd.DataFrame({"symbol": "ETHUSDT", "close": [100.0, 110, 121],
+                       "open_time": pd.to_datetime(["2025-03-01 00:00", "2025-03-01 00:15", "2025-03-01 00:45"])})
+    r = horizon_return(df, 2)
+    assert math.isnan(r.iloc[0]) and math.isclose(r.iloc[1], 121 / 110 - 1) and math.isnan(r.iloc[2])
+    assert list(np.nan_to_num(three_class(np.array([0.01, 0.0, -0.01, np.nan])), nan=9)) == [1, -1, 0, 9]
+
+
+def test_embargo_drops_rows_whose_label_crosses():
+    t = pd.to_datetime(["2025-02-28 23:45", "2025-03-01 00:00", "2025-03-01 00:15", "2025-03-01 00:30", "2025-03-01 00:45"])
+    kept = embargo(pd.DataFrame({"open_time": t}), pd.Timestamp("2025-03-01 01:00"), 4)
+    assert list(kept["open_time"]) == [t[0]]
+
+
+def test_simulate_exit_horizon():
+    df = pd.DataFrame({"symbol": "BTCUSDT", "open_time": pd.date_range("2025-03-01", periods=8, freq="15min"),
+                       "close": [100.0, 101, 102, 103, 104, 105, 106, 107]})
+    buy = np.array([1.0, 0, 0, 0, 0, 0, 0, 0])
+    out = simulate_exit(df, buy, np.zeros(8), 0.5, 0.5, early_exit=False, horizon_bars=2)
+    assert out["trades"] == 1 and math.isclose(out["mean_net"], 102 / 100 - 1 - FEE)
+    nets = simulate_exit(df, buy, np.zeros(8), 0.5, 0.5, early_exit=False, horizon_bars=2, with_trades=True)["nets"]
+    assert len(nets) == 1 and math.isclose(nets[0], 102 / 100 - 1 - FEE)
+
+
+def test_tune_margin_trades_respects_min_trades():
+    df = pd.DataFrame({"symbol": "BTCUSDT", "open_time": pd.date_range("2025-03-01", periods=400, freq="15min"),
+                       "close": 100 + np.sin(np.arange(400) / 5)})
+    score = np.cos(np.arange(400) / 5)
+    margin = tune_margin_trades(df, score, 4, min_trades=30)
+    assert simulate_exit(df, score, np.zeros(400), margin, 1.0, early_exit=False, horizon_bars=4)["trades"] >= 30
+
+
 def test_recency_weights():
     t = pd.Series(pd.to_datetime(["2023-01-01", "2024-01-01"]))
     w = recency_weights(t, half_life_days=365)
@@ -76,13 +108,14 @@ def test_decide():
 def test_artifact_roundtrip():
     from final_model import MODEL_DIR, apply_scaler, load_artifact, load_splits
 
-    if not (MODEL_DIR / "model.pkl").exists():
-        print("skipped: no artifact in", MODEL_DIR)
-        return
-    model, scaler, schema, decision = load_artifact(MODEL_DIR)
-    proba = model.predict_proba(apply_scaler(load_splits()["val_b"].iloc[:100], scaler))
-    assert np.allclose(proba, np.load(MODEL_DIR / "check.npz")["proba"], atol=1e-12)
-    assert schema["schema_version"] == "1" and set(decision) >= {"classes", "means", "fee", "buy_margin", "sell_margin"}
+    for folder in [MODEL_DIR, MODEL_DIR.parent / "v2"]:
+        if not (folder / "model.pkl").exists():
+            print("skipped: no artifact in", folder)
+            continue
+        model, scaler, schema, decision = load_artifact(folder)
+        proba = model.predict_proba(apply_scaler(load_splits()["val_b"].iloc[:100], scaler))
+        assert np.allclose(proba, np.load(folder / "check.npz")["proba"], atol=1e-12), folder
+        assert schema["schema_version"] == "1" and set(decision) >= {"classes", "means", "fee", "buy_margin", "sell_margin"}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,2 @@
+horizon,model,bars,trades,mean_net,ci_low,ci_high,hit_rate,random_mean_net,random_trades,verdict
+1 hour,random_forest,23000,38,0.0016885881712277984,-0.0021838499718699954,0.00549872952652295,0.5,-0.002469431999012145,5740,pass

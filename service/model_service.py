@@ -14,17 +14,19 @@ MODEL_VERSION = os.environ.get("MODEL_VERSION", "v1")
 model, scaler, schema, decision = load_artifact(MODEL_DIR)
 FEATURES = schema["features"]
 CLASSES = list(model.classes_)
+HORIZON_MINUTES = int(decision.get("horizon_minutes", 60))  # v1 predates the setting: one hour
 
 app = FastAPI()
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "model_version": MODEL_VERSION, "schema_version": schema["schema_version"]}
+def health() -> dict[str, str | int]:
+    return {"status": "ok", "model_version": MODEL_VERSION, "schema_version": schema["schema_version"],
+            "horizon_minutes": HORIZON_MINUTES}
 
 
 @app.post("/v1/predict")
-def predict(payload: dict[str, Any]) -> dict[str, float | str]:
+def predict(payload: dict[str, Any]) -> dict[str, float | str | int]:
     features = payload.get("features")
     if not isinstance(features, dict):
         raise HTTPException(status_code=422, detail="features must be an object")
@@ -39,4 +41,4 @@ def predict(payload: dict[str, Any]) -> dict[str, float | str]:
     proba = model.predict_proba(apply_scaler(pd.DataFrame([features], columns=FEATURES), scaler))[0]
     p = dict(zip(CLASSES, (float(v) for v in proba)))
     return {"p_up": p[1], "p_flat": p[-1], "p_down": p[0], "action": decide(proba, CLASSES, decision),
-            "model_version": MODEL_VERSION, "schema_version": schema["schema_version"]}
+            "model_version": MODEL_VERSION, "schema_version": schema["schema_version"], "horizon_minutes": HORIZON_MINUTES}

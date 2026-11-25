@@ -131,8 +131,9 @@ def tune_margin(score, fwd_ret, side: str, min_share: float) -> float:
 
 
 def simulate_exit(df: pd.DataFrame, buy_score, sell_score, buy_margin: float, sell_margin: float,
-                  early_exit: bool) -> dict:
-    """A user following the Buy signals: one position per coin, sold after 4 bars or, with early_exit, at the first Sell."""
+                  early_exit: bool, horizon_bars: int = 4, with_trades: bool = False) -> dict:
+    """A user following the Buy signals: one position per coin, sold after horizon_bars bars or, with early_exit, at the
+    first Sell."""
     frame = df[["symbol", "open_time", "close"]].assign(buy=np.asarray(buy_score), sell=np.asarray(sell_score))
     nets = []
     for _, g in frame.sort_values("open_time").groupby("symbol", sort=False):
@@ -144,7 +145,7 @@ def simulate_exit(df: pd.DataFrame, buy_score, sell_score, buy_margin: float, se
                 i += 1
                 continue
             # Exits are found by time, not row offset: bars can be missing, so the 4th row may be more than an hour away
-            deadline = t[i] + np.timedelta64(60, "m")
+            deadline = t[i] + np.timedelta64(15 * horizon_bars, "m")
             k = None
             if early_exit:
                 for m in range(i + 1, len(g)):
@@ -162,8 +163,49 @@ def simulate_exit(df: pd.DataFrame, buy_score, sell_score, buy_margin: float, se
             else:
                 i += 1  # exit bar missing: skip this trade
     nets = np.array(nets)
-    return {"trades": len(nets), "mean_net": float(nets.mean()) if len(nets) else float("nan"),
-            "hit_rate": float((nets > 0).mean()) if len(nets) else float("nan")}
+    out = {"trades": len(nets), "mean_net": float(nets.mean()) if len(nets) else float("nan"),
+           "hit_rate": float((nets > 0).mean()) if len(nets) else float("nan")}
+    return {**out, "nets": nets} if with_trades else out  # per-trade results, e.g. for a bootstrap
+
+
+def horizon_return(df: pd.DataFrame, horizon_bars: int) -> pd.Series:
+    """close[t+H] / close[t] - 1 per coin; NaN unless the bar exactly H x 15 minutes later exists."""
+    out = pd.Series(np.nan, index=df.index)
+    for _, g in df.groupby("symbol"):
+        later = g.set_index("open_time")["close"].reindex(g["open_time"] + pd.Timedelta(minutes=15 * horizon_bars))
+        out.loc[g.index] = later.to_numpy() / g["close"].to_numpy() - 1
+    return out
+
+
+def three_class(fwd) -> np.ndarray:
+    """1 up / 0 down / -1 flat at the fee, as in cleanup.py; NaN stays NaN."""
+    fwd = np.asarray(fwd, dtype=float)
+    return np.where(np.isnan(fwd), np.nan, np.select([fwd > DELTA, fwd < -DELTA], [1, 0], -1))
+
+
+def embargo(df: pd.DataFrame, next_start: pd.Timestamp, horizon_bars: int) -> pd.DataFrame:
+    """Drops the rows whose label would look into the next split."""
+    return df[df["open_time"] + pd.Timedelta(minutes=15 * horizon_bars) < next_start]
+
+
+def random_buy(df: pd.DataFrame, horizon_bars: int) -> dict:
+    """The baseline a Buy rule must beat: buying whenever no position is open, selling H bars later."""
+    ones = np.ones(len(df))
+    return simulate_exit(df, ones, np.zeros(len(df)), 0.0, 1.0, early_exit=False, horizon_bars=horizon_bars)
+
+
+def tune_margin_trades(df: pd.DataFrame, score, horizon_bars: int, min_trades: int) -> float:
+    """The score quantile (50% to 99.5%) with the best mean net per non-overlapping trade among those with at least
+    min_trades trades."""
+    score = np.asarray(score, dtype=float)
+    zeros = np.zeros(len(df))
+    best, best_margin = -np.inf, float(np.quantile(score, 0.5))
+    for q in np.arange(0.5, 0.9951, 0.005):
+        margin = float(np.quantile(score, q))
+        res = simulate_exit(df, score, zeros, margin, 1.0, early_exit=False, horizon_bars=horizon_bars)
+        if res["trades"] >= min_trades and res["mean_net"] > best:
+            best, best_margin = res["mean_net"], margin
+    return best_margin
 
 
 def decide(proba_row, classes, decision: dict) -> str:
