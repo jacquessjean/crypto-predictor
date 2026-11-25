@@ -65,6 +65,9 @@ def init_db(db_path: str | None = None) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(predictions)")}
         if "features_json" not in columns:
             conn.execute("ALTER TABLE predictions ADD COLUMN features_json TEXT")
+        # Online learning: whether this resolved prediction was sent back to the model service as a labeled sample.
+        if "feedback_sent" not in columns:
+            conn.execute("ALTER TABLE predictions ADD COLUMN feedback_sent INTEGER NOT NULL DEFAULT 0")
         # WAIT is not a trade, so it has no right/wrong outcome (older rows were marked 'incorrect').
         conn.execute(
             "UPDATE predictions SET status = 'neutral' WHERE action = 'WAIT' AND status != 'pending'"
@@ -183,6 +186,27 @@ def update_prediction_outcome(
             """,
             (exit_price, realized_return, net_return, status, _utc_now_iso(), prediction_id),
         )
+
+
+def get_unsent_feedback(limit: int = 500, db_path: str | None = None) -> list[dict]:
+    """Resolved predictions with stored features that the model service has not received yet."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, pair, bar_time, features_json, realized_return FROM predictions
+            WHERE status != 'pending' AND features_json IS NOT NULL AND realized_return IS NOT NULL
+              AND feedback_sent = 0
+            ORDER BY expires_at_ms ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_feedback_sent(prediction_ids: list[int], db_path: str | None = None) -> None:
+    with get_conn(db_path) as conn:
+        conn.executemany("UPDATE predictions SET feedback_sent = 1 WHERE id = ?", [(i,) for i in prediction_ids])
 
 
 def get_stats(db_path: str | None = None) -> dict:

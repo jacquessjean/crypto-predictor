@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -51,9 +52,12 @@ VAL_B_START = pd.Timestamp("2025-03-01")
 WEAK_FEATURES = ["lower_wick", "vol_96", "volatility", "rv_15", "normalized_volatility"]  # Phase III importance <= 0
 
 
-def load_splits(path=FEATURES_PATH) -> dict[str, pd.DataFrame]:
-    """train / val_a / val_b / test frames with the 36 features, the label, the forward return and the close."""
-    df = pd.read_parquet(path, columns=["open_time", "symbol", "close", "fwd_ret", "label", "split"] + FEATURES)
+def load_splits(path=FEATURES_PATH, include_test: bool = True) -> dict[str, pd.DataFrame]:
+    """train / val_a / val_b / test frames with the 36 features, the label, the forward return and the close.
+    include_test=False skips reading the test rows (retraining never uses them, and it halves the memory)."""
+    filters = None if include_test else [("split", "in", ["train", "val"])]
+    df = pd.read_parquet(path, columns=["open_time", "symbol", "close", "fwd_ret", "label", "split"] + FEATURES,
+                         filters=filters)
     val = df[df["split"] == "val"]
     return {"train": df[df["split"] == "train"], "val_a": val[val["open_time"] < VAL_B_START],
             "val_b": val[val["open_time"] >= VAL_B_START], "test": df[df["split"] == "test"]}
@@ -258,3 +262,127 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# ---------------------------------------------------------------------------- online learning
+class FeedbackStore:
+    """Labeled samples sent back by the application (features + realized return), one per pair and bar."""
+
+    def __init__(self, path):
+        import sqlite3
+
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._connect = lambda: sqlite3.connect(self.path, timeout=10.0)
+        with self._connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS feedback (pair TEXT NOT NULL, bar_time TEXT NOT NULL,
+                            features_json TEXT NOT NULL, realized_return REAL NOT NULL, received_at TEXT NOT NULL,
+                            UNIQUE(pair, bar_time))""")
+
+    def add(self, samples: list[dict]) -> tuple[int, int]:
+        """Stores new samples; returns (accepted, duplicates)."""
+        now = pd.Timestamp.now(tz="UTC").isoformat()
+        accepted = 0
+        with self._connect() as conn:
+            for s in samples:
+                cur = conn.execute("INSERT OR IGNORE INTO feedback VALUES (?, ?, ?, ?, ?)",
+                                   (s["pair"], s["bar_time"], json.dumps(s["features"]), float(s["realized_return"]), now))
+                accepted += cur.rowcount
+        return accepted, len(samples) - accepted
+
+    def load(self) -> pd.DataFrame:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT pair, bar_time, features_json, realized_return, received_at FROM feedback").fetchall()
+        feats = pd.DataFrame([json.loads(r[2]) for r in rows], columns=FEATURES)
+        meta = pd.DataFrame([(r[0], r[1], r[3], r[4]) for r in rows], columns=["pair", "bar_time", "realized_return", "received_at"])
+        return pd.concat([meta, feats], axis=1)
+
+    def count_since(self, received_after) -> int:
+        """Samples received after a time (ISO string); all of them when received_after is None."""
+        with self._connect() as conn:
+            if received_after is None:
+                return conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+            return conn.execute("SELECT COUNT(*) FROM feedback WHERE received_at > ?", (received_after,)).fetchone()[0]
+
+
+def fit_v2(train: pd.DataFrame, val_a: pd.DataFrame):
+    """The v2 recipe: scaler on train, Random Forest with move-size weights and the weak features dropped, sigmoid
+    calibration on val-A. Returns (pipeline taking the 36 scaled features, scaler, class means)."""
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.compose import ColumnTransformer
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.frozen import FrozenEstimator
+    from sklearn.pipeline import Pipeline
+
+    cols = [c for c in FEATURES if c not in WEAK_FEATURES]
+    scaler = fit_scaler(train)
+    Xtr, Xa = apply_scaler(train, scaler), apply_scaler(val_a, scaler)
+    forest = RandomForestClassifier(n_estimators=100, max_depth=8, max_features="sqrt", criterion="log_loss",
+                                    n_jobs=-1, random_state=0)
+    forest.fit(Xtr[cols], train["label"].astype(int), sample_weight=size_weights(train["fwd_ret"]))
+    calibrated = CalibratedClassifierCV(FrozenEstimator(forest), method="sigmoid").fit(Xa[cols], val_a["label"].astype(int))
+    select = (ColumnTransformer([("keep", "passthrough", cols)], remainder="drop", verbose_feature_names_out=False)
+              .set_output(transform="pandas").fit(Xa))
+    return Pipeline([("select", select), ("model", calibrated)]), scaler, class_means(train)
+
+
+def _gate(live, new, val_b: pd.DataFrame, tolerance: float, baseline: float | None = None) -> dict:
+    """The safety gate: on val-B the new model must not be worse than the live one, nor than the first model of the
+    chain (`baseline`, so promotions cannot drift down by a tolerance at a time), by more than `tolerance` in log loss,
+    and its probabilities must be valid and cover all three classes."""
+    from sklearn.metrics import log_loss
+
+    (lm, ls), (nm, ns) = live, new
+    pl, pn = lm.predict_proba(apply_scaler(val_b, ls)), nm.predict_proba(apply_scaler(val_b, ns))
+    y = val_b["label"].astype(int)
+    live_ll, new_ll = log_loss(y, pl, labels=CLASSES), log_loss(y, pn, labels=CLASSES)
+    baseline = live_ll if baseline is None else baseline
+    valid = bool(np.isfinite(pn).all() and np.allclose(pn.sum(axis=1), 1.0, atol=1e-9) and set(nm.classes_) == set(CLASSES))
+    reason = ("invalid probabilities or missing class" if not valid else
+              f"log loss on val-B {new_ll:.5f} is worse than the live model's {live_ll:.5f} by more than {tolerance}"
+              if new_ll > live_ll + tolerance else
+              f"log loss on val-B {new_ll:.5f} is worse than the baseline's {baseline:.5f} by more than {tolerance}"
+              if new_ll > baseline + tolerance else "")
+    return {"passed": not reason, "reason": reason, "live_log_loss": live_ll, "new_log_loss": new_ll,
+            "baseline_log_loss": baseline}
+
+
+def retrain(base_path, store: "FeedbackStore", live_dir, models_root, min_new: int = 50,
+            tolerance: float = 0.0005) -> dict:
+    """One online-learning step: retrain on the training data plus all feedback, gate it against the live model, and
+    promote it as the next version (writing current.json) only if it passes."""
+    live_dir, models_root = Path(live_dir), Path(models_root)
+    trained_on_path = live_dir / "trained_on.json"
+    trained_on = json.loads(trained_on_path.read_text()) if trained_on_path.exists() else {}
+    since = trained_on.get("feedback_received_until")
+    new = store.count_since(since)
+    report = {"status": "skipped", "reason": "", "version": None, "new_samples": new}
+    if new < min_new:
+        return {**report, "reason": f"{new} new feedback samples, {min_new} needed"}
+
+    splits, fb = load_splits(base_path, include_test=False), store.load()
+    fb_rows = fb.assign(symbol=fb["pair"], open_time=pd.to_datetime(fb["bar_time"], utc=True).dt.tz_localize(None),
+                        fwd_ret=fb["realized_return"], label=three_class(fb["realized_return"]).astype(int), split="train",
+                        close=np.nan)  # close is only used by the exit simulation, never for training
+    train = pd.concat([splits["train"], fb_rows[splits["train"].columns]], ignore_index=True)
+    model, scaler, means = fit_v2(train, splits["val_a"])
+    live_model, live_scaler, _, live_decision = load_artifact(live_dir)
+    gate = _gate((live_model, live_scaler), (model, scaler), splits["val_b"], tolerance,
+                 baseline=trained_on.get("baseline_log_loss"))
+    report.update(live_log_loss=gate["live_log_loss"], new_log_loss=gate["new_log_loss"])
+    if not gate["passed"]:
+        return {**report, "status": "rejected", "reason": gate["reason"]}
+
+    numbers = [int(p.name[1:]) for p in models_root.glob("v*") if p.name[1:].isdigit()]
+    version = f"v{max(numbers) + 1}"
+    decision = {**live_decision, "means": {str(k): v for k, v in means.items()}}  # margin, Sell switch, horizon kept
+    save_artifact(models_root / version, model, scaler, decision)
+    (models_root / version / "trained_on.json").write_text(json.dumps({
+        "base_rows": int(len(splits["train"])), "feedback_rows": int(len(fb)),
+        "feedback_received_until": fb["received_at"].max(), "trained_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        "previous_version": live_dir.name, "baseline_log_loss": gate["baseline_log_loss"], "gate": gate},
+        indent=1, default=float))
+    pointer = models_root / "current.json"
+    tmp = pointer.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"version": version}))
+    os.replace(tmp, pointer)  # atomic: a crash never leaves a half-written pointer that would stop the service
+    return {**report, "status": "promoted", "version": version}

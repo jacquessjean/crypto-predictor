@@ -1,9 +1,11 @@
+import json
 import logging
 from datetime import datetime, timezone
 
 from .binance import BinanceRestError, fetch_close_at
 from .config import ROUND_TRIP_FEE
-from .db import get_due_pending_predictions, update_prediction_outcome
+from .db import get_due_pending_predictions, get_unsent_feedback, mark_feedback_sent, update_prediction_outcome
+from .model_client import ModelServiceError, send_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -63,4 +65,22 @@ def resolve_pending_predictions() -> int:
         except Exception:
             logger.exception("Unexpected error resolving prediction %s", row["id"])
 
+    send_pending_feedback()
     return resolved_count
+
+
+def send_pending_feedback() -> int:
+    """Online learning: send every resolved prediction (its features and realized return) back to the model service
+    as a labeled sample. Rows are marked only once the service has them, so an outage is retried on the next run."""
+    rows = get_unsent_feedback()
+    if not rows:
+        return 0
+    samples = [{"pair": r["pair"], "bar_time": r["bar_time"], "features": json.loads(r["features_json"]),
+                "realized_return": float(r["realized_return"])} for r in rows]
+    try:
+        send_feedback(samples)
+    except ModelServiceError as exc:
+        logger.warning("Feedback not sent (will retry): %s", exc)
+        return 0
+    mark_feedback_sent([int(r["id"]) for r in rows])
+    return len(rows)

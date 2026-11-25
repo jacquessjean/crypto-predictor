@@ -59,3 +59,21 @@ def predict_from_features(
         "model_version": str(data.get("model_version", "unknown")),
         "schema_version": str(data.get("schema_version", "unknown")),
     }
+
+
+def send_feedback(samples: list[dict]) -> int:
+    """POST resolved predictions to the model service (`POST /v1/feedback`) as labeled samples for retraining.
+
+    Each sample: {"pair", "bar_time", "features": {36 names}, "realized_return"}. Returns how many the service took
+    (new plus already known); raises ModelServiceError when it cannot be reached or refuses the batch.
+    """
+    try:
+        with httpx.Client(timeout=settings.request_timeout_seconds) as client:
+            response = client.post(f"{settings.model_url}/v1/feedback", json={"samples": samples})
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise ModelServiceError(f"Model service returned HTTP {exc.response.status_code}") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise ModelServiceError("Model service is unavailable") from exc
+    return int(data.get("accepted", 0)) + int(data.get("duplicates", 0))

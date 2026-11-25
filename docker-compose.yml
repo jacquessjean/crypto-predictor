@@ -28,11 +28,18 @@ services:
       context: .
       dockerfile: service/Dockerfile
     environment:
-      MODEL_DIR: /models/v2
-      MODEL_VERSION: v2
+      MODELS_ROOT: /models  # versions live here; current.json names the live one once a retrain is promoted
+      MODEL_DIR: /models/v2  # the live model until the first promoted retrain
+      BASE_DATA: /data/features.parquet
+      RETRAIN_INTERVAL_HOURS: ${RETRAIN_INTERVAL_HOURS:-24}  # online learning: retrain on the feedback once a day
+      MIN_NEW_FEEDBACK: ${MIN_NEW_FEEDBACK:-50}  # skip a retrain until this many new labeled samples arrived
     volumes:
-      - ./out/model/v2:/models/v2:ro  # the trained artifact; v1 stays in out/model/v1 (switch both lines back to roll back)
+      - ./out/model:/models  # read-write: the service stores feedback and writes new versions here
+      - ./out/model/v1:/models/v1:ro  # the shipped models stay read-only: a retrain only ever adds v3, v4, ...
+      - ./out/model/v2:/models/v2:ro
+      - ./out/processed/features.parquet:/data/features.parquet:ro  # the training data (built by src/cleanup.py)
     networks: [back]
+    restart: unless-stopped  # a retrain peaks near 4 GB; if Docker kills it for memory, the service comes back
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
       interval: 5s
