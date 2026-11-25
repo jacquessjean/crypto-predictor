@@ -52,8 +52,9 @@ def _real_raw_pair() -> tuple[Path, Path] | None:
     if not pair_root.is_dir() or not btc_root.is_dir():
         return None
 
-    pair_dumps = {path.stem.rsplit("-", 1)[-1]: path for path in pair_root.glob("*.zip")}
-    btc_dumps = {path.stem.rsplit("-", 1)[-1]: path for path in btc_root.glob("*.zip")}
+    month = lambda path: "-".join(path.stem.split("-")[-2:])  # "ETHUSDT-1m-2026-10" -> "2026-10" (year and month)
+    pair_dumps = {month(path): path for path in pair_root.glob("*.zip")}
+    btc_dumps = {month(path): path for path in btc_root.glob("*.zip")}
     months = sorted(set(pair_dumps).intersection(btc_dumps), reverse=True)
     return (pair_dumps[months[0]], btc_dumps[months[0]]) if months else None
 
@@ -114,7 +115,7 @@ def test_live_training_feature_parity(tmp_path):
         int(pair.iloc[-1]["open_time"].timestamp() * 1000),
         unit="ms",
         tz="UTC",
-    )
+    ).floor("15min")  # the live path keeps only closed 15-minute bars, so compare against the same closed bar
     pair = pair[pair["open_time"] < cutoff]
     btc = btc[btc["open_time"] < cutoff]
     pair.attrs["symbol"] = "ETHUSDT"

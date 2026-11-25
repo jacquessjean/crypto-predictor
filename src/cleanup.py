@@ -21,6 +21,7 @@ HORIZON = 4 # predict 4 steps (1 hour) ahead
 DELTA = 0.002 # |move| <= 0.2% (Binance round-trip taker fee) counts as flat and is dropped
 VAL_START = pd.Timestamp("2024-10-01") # one cutoff for every pair: no cross-asset leakage
 TEST_START = pd.Timestamp("2025-07-01")
+TEST_END = pd.Timestamp("2026-11-01")  # fixed, so every machine builds the same test set whatever it downloaded
 
 FEATURES = [
     "symbol=BTCUSDT", "symbol=ETHUSDT", "symbol=BNBUSDT", "symbol=XRPUSDT", "symbol=ADAUSDT",
@@ -107,6 +108,7 @@ def add_features(d: pd.DataFrame) -> pd.DataFrame:
     hour = d.index.hour + d.index.minute / 60
     f["hour_sin"], f["hour_cos"] = np.sin(2 * np.pi * hour / 24), np.cos(2 * np.pi * hour / 24)
     f["dow_sin"], f["dow_cos"] = np.sin(2 * np.pi * d.index.dayofweek / 7), np.cos(2 * np.pi * d.index.dayofweek / 7)
+    f["close"] = c  # not a feature: kept so the exit rule can be simulated bar by bar
     f["fwd_ret"] = c.shift(-HORIZON) / c - 1  # NaN when the future bar is missing, so no fake labels across gaps
     return f
 
@@ -132,6 +134,7 @@ def build() -> None:
     pd.DataFrame(logs).to_csv(OUT / "cleaning_log.csv", index=False)
 
     df = add_market_features(pd.concat(parts).rename_axis("open_time").reset_index())
+    df = df[df["open_time"] < TEST_END]
     rows_before = len(df)
     df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURES + ["fwd_ret"])
     print(f"dropped {rows_before - len(df)} rows with missing features/target, {len(df)} left")

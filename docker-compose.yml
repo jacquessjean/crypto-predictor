@@ -27,6 +27,8 @@ services:
     build:
       context: .
       dockerfile: service/Dockerfile
+    volumes:
+      - ./out/model/v1:/models/v1:ro  # the trained artifact; a new model = a new folder + MODEL_DIR / MODEL_VERSION
     networks: [back]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]

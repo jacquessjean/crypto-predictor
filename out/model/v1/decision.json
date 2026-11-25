@@ -1,0 +1,20 @@
+{
+ "classes": [
+  -1,
+  0,
+  1
+ ],
+ "means": {
+  "-1": 8.665726747373853e-06,
+  "0": -0.009107221774924661,
+  "1": 0.009201850936882005
+ },
+ "fee": 0.002,
+ "buy_margin": 9.090487970567904e-05,
+ "sell_margin": 0.0,
+ "criterion": "log_loss",
+ "variant": "drop_weak+size",
+ "calibration": "sigmoid",
+ "early_exit": false,
+ "sell_enabled": false
+}

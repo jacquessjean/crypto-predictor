@@ -11,5 +11,7 @@
 !app/web/src/**
 !service/
 !service/stub.py
+!service/model_service.py
 !src/
 !src/cleanup.py
+!src/final_model.py

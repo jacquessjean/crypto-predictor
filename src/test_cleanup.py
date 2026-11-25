@@ -20,6 +20,8 @@ def test_no_lookahead():
     full, cut = feats(d), feats(d.iloc[:1500 * 15])
     pd.testing.assert_frame_equal(full[FEATURES].iloc[:1500], cut[FEATURES])
     assert cut["fwd_ret"].iloc[-HORIZON:].isna().all()  # no label without a real future candle
+    assert "close" in full.columns and "close" not in FEATURES  # kept for the exit simulation, never a model input
+    pd.testing.assert_series_equal(full["close"].iloc[:1500], cut["close"])
 
 
 if __name__ == "__main__":

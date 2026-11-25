@@ -7,3 +7,4 @@ out/raw/
 out/processed/*.parquet
 out/processed/cleaned_dataset.*
 appdata/
+.superpowers/
