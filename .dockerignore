@@ -3,10 +3,12 @@
 !app/api/
 !app/api/*.py
 !app/web/
-!app/web/*.html
-!app/web/*.js
-!app/web/*.css
-!app/web/*.conf
+!app/web/index.html
+!app/web/nginx.conf
+!app/web/package.json
+!app/web/vite.config.js
+!app/web/src/
+!app/web/src/**
 !service/
 !service/stub.py
 !src/

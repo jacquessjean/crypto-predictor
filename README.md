@@ -47,7 +47,7 @@ Compose builds the services from the paths that exist in this repository:
 
 | Service | Source | Purpose |
 | --- | --- | --- |
-| `web` | `app/web/` | Serves the HTML, CSS, and JavaScript with unprivileged Nginx. The browser sends API requests through Nginx at `/api/`. |
+| `web` | `app/web/` | Builds the React frontend with Vite, then serves the production bundle with unprivileged Nginx. The browser sends API requests through Nginx at `/api/`. |
 | `api` | `app/api/` and `src/cleanup.py` | FastAPI application. Fetches market data, creates live features, calls the model service, stores predictions in SQLite, and resolves completed predictions. |
 | `model` | `service/stub.py` | Lightweight HTTP model-service stub used by the current Compose setup. Provides a health endpoint and accepts prediction requests. |
 
