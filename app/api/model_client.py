@@ -106,7 +106,9 @@ def get_model_status(transport: httpx.BaseTransport | None = None) -> dict:
             "new_feedback": int(data.get("new_feedback", 0)),
             "min_new_feedback": int(data.get("min_new_feedback", 50)),
             "retraining": bool(data.get("retraining", False)),
-            "last_retrain": None if not last else {k: last.get(k) for k in ("status", "reason", "version", "at")},
+            # an error's reason is the raw exception (paths, internals): it stays in the model service's log
+            "last_retrain": None if not last else {**{k: last.get(k) for k in ("status", "reason", "version", "at")},
+                                                   **({"reason": "see the model service log"} if last.get("status") == "error" else {})},
         }
     except httpx.HTTPStatusError as exc:
         raise ModelServiceError(f"Model service returned HTTP {exc.response.status_code}") from exc

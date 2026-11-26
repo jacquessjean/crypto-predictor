@@ -31,6 +31,12 @@ def test_status_before_any_retrain_has_no_report():
     assert status["last_retrain"] is None and status["model_version"] == "v2"
 
 
+def test_a_failed_retrain_does_not_expose_its_exception():
+    health = {**HEALTH, "last_retrain": {"status": "error", "reason": "OSError: /data/features.parquet missing", "at": "x"}}
+    status = model_client.get_model_status(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=health)))
+    assert status["last_retrain"]["status"] == "error" and "/data" not in status["last_retrain"]["reason"]
+
+
 def test_status_raises_when_the_model_service_fails():
     with pytest.raises(ModelServiceError):
         model_client.get_model_status(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
