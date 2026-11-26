@@ -17,7 +17,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 
 from cleanup import SYMBOLS
-from final_model import FeedbackStore, apply_scaler, decide, load_artifact, retrain
+from final_model import FeedbackStore, apply_scaler, decide, expected_net, load_artifact, new_feedback, retrain
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/models/v2"))  # used when no retrain has been promoted yet
 MODELS_ROOT = Path(os.environ.get("MODELS_ROOT", MODEL_DIR.parent))  # where versions and current.json live
@@ -26,11 +26,15 @@ FEEDBACK_DB = Path(os.environ.get("FEEDBACK_DB", MODELS_ROOT / "feedback.db"))
 RETRAIN_INTERVAL_HOURS = float(os.environ.get("RETRAIN_INTERVAL_HOURS", "24"))  # 0 disables the schedule
 MIN_NEW_FEEDBACK = int(os.environ.get("MIN_NEW_FEEDBACK", "50"))
 GATE_TOLERANCE = float(os.environ.get("GATE_TOLERANCE", "0.0005"))  # allowed val-B log-loss increase
+# retrain as soon as MIN_NEW_FEEDBACK new outcomes have arrived, not only on the daily schedule (which stays as a backup)
+AUTO_RETRAIN = os.environ.get("AUTO_RETRAIN", "1") != "0"
 
-logger = logging.getLogger("model_service")
+logger = logging.getLogger("uvicorn.error.retrain")  # printed with the server's own log lines
+logger.setLevel(logging.INFO)
 RETRAIN_LOCK = threading.Lock()  # one retrain at a time
 _LIVE_LOCK = threading.Lock()  # guards the swap of the live model
 _store = None
+retrain_thread: threading.Thread | None = None  # the last background retrain (automatic or forced)
 live: dict = {}
 last_retrain: dict = {}
 
@@ -50,6 +54,10 @@ def load_live() -> None:
     with _LIVE_LOCK:
         live.update(dir=folder, version=folder.name, model=model, scaler=scaler, schema=schema, decision=decision,
                     classes=list(model.classes_), horizon=int(decision.get("horizon_minutes", 60)))
+    record = folder / "trained_on.json"  # written when a retrain promoted this version
+    if not last_retrain and record.exists():  # after a restart, report the promotion that made the live version
+        last_retrain.update(status="promoted", reason="", version=folder.name,
+                            at=json.loads(record.read_text()).get("trained_at"))
 
 
 load_live()
@@ -67,32 +75,43 @@ def invalid_features(features: Any) -> list[str] | None:
             or not isinstance(features[name], (int, float)) or not math.isfinite(features[name])] or None
 
 
-def run_retrain() -> dict:
-    """One online-learning step; refuses to start while another is running."""
+def run_retrain(record_skip: bool = True, min_new: int | None = None) -> dict:
+    """One online-learning step; refuses to start while another is running. record_skip=False keeps the last report
+    when this attempt is skipped (too few new outcomes), so frequent automatic attempts do not hide the last retrain."""
     if not RETRAIN_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="a retrain is already running")
+    needed = MIN_NEW_FEEDBACK if min_new is None else min_new
     try:
-        report = retrain(BASE_DATA, store(), live["dir"], MODELS_ROOT, min_new=MIN_NEW_FEEDBACK, tolerance=GATE_TOLERANCE)
+        new = new_feedback(store(), live["dir"])
+        if new >= needed:
+            logger.info("retrain started: %d new outcomes (at least %d needed), live model %s", new, needed, live["version"])
+        report = retrain(BASE_DATA, store(), live["dir"], MODELS_ROOT, min_new=needed, tolerance=GATE_TOLERANCE)
         if report["status"] == "promoted":
             load_live()
+            logger.info("retrain promoted %s: val-B log loss %.5f vs %.5f for the previous model, now live",
+                        report["version"], report["new_log_loss"], report["live_log_loss"])
+        elif report["status"] == "rejected":
+            logger.info("retrain rejected, %s stays live: %s", live["version"], report["reason"])
     except Exception as exc:  # recorded so /health shows it, then raised for the caller
         report = {"status": "error", "reason": f"{type(exc).__name__}: {exc}"}
+        logger.error("retrain failed, %s stays live: %s", live["version"], report["reason"])
         raise
     finally:
-        last_retrain.clear()
-        last_retrain.update({**report, "at": pd.Timestamp.now(tz="UTC").isoformat()})
+        if record_skip or report["status"] != "skipped":
+            last_retrain.clear()
+            last_retrain.update({**report, "at": pd.Timestamp.now(tz="UTC").isoformat()})
         RETRAIN_LOCK.release()
     return report
 
 
-def scheduled_tick() -> None:
-    """One scheduled retrain. Never raises, so a failure (missing data, a full disk) cannot stop the schedule."""
+def scheduled_tick(record_skip: bool = True, min_new: int | None = None) -> None:
+    """One scheduled, automatic or forced retrain. Never raises, so a failure (missing data, a full disk) cannot stop it."""
     try:
-        run_retrain()
+        run_retrain(record_skip, min_new)
     except HTTPException:
         pass  # a manual retrain is running: skip this tick
     except Exception:
-        logger.exception("scheduled retrain failed (reported in /health; the next tick will try again)")
+        pass  # already logged and reported in /health; the next attempt will try again
 
 
 def _schedule(stop: threading.Event) -> None:
@@ -114,9 +133,12 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    has_store = _store is not None or FEEDBACK_DB.exists()  # never creates the file
     return {"status": "ok", "model_version": live["version"], "schema_version": live["schema"]["schema_version"],
             "horizon_minutes": live["horizon"],
-            "feedback_samples": store().count_since(None) if _store or FEEDBACK_DB.exists() else 0,  # never creates the file
+            "feedback_samples": store().count_since(None) if has_store else 0,
+            "new_feedback": new_feedback(store(), live["dir"]) if has_store else 0,  # toward the next retrain
+            "min_new_feedback": MIN_NEW_FEEDBACK, "retraining": RETRAIN_LOCK.locked(),
             "last_retrain": last_retrain or None}
 
 
@@ -131,7 +153,10 @@ def predict(payload: dict[str, Any]) -> dict[str, float | str | int]:
     current = dict(live)  # one consistent snapshot even if a retrain swaps the model meanwhile
     proba = current["model"].predict_proba(apply_scaler(pd.DataFrame([features], columns=FEATURES), current["scaler"]))[0]
     p = dict(zip(current["classes"], (float(v) for v in proba)))
+    # expected return of buying now after the fee, and the learned margin it must exceed for a Buy
+    buy = float(expected_net(proba.reshape(1, -1), current["classes"], current["decision"]["means"], "buy")[0])
     return {"p_up": p[1], "p_flat": p[-1], "p_down": p[0], "action": decide(proba, current["classes"], current["decision"]),
+            "expected_net": buy, "buy_margin": float(current["decision"]["buy_margin"]),
             "model_version": current["version"], "schema_version": current["schema"]["schema_version"],
             "horizon_minutes": current["horizon"]}
 
@@ -152,7 +177,19 @@ def feedback(payload: dict[str, Any]) -> dict[str, int]:
             raise HTTPException(status_code=422, detail=f"sample {i} is malformed; nothing was stored")
         clean.append({**s, "bar_time": when})
     accepted, duplicates = store().add(clean)
+    if AUTO_RETRAIN and accepted and not RETRAIN_LOCK.locked():
+        start_auto_retrain()
     return {"accepted": accepted, "duplicates": duplicates}
+
+
+def start_auto_retrain(record_skip: bool = False, min_new: int | None = None) -> None:
+    """Online learning right after outcomes arrive: a background retrain attempt, which trains only once
+    MIN_NEW_FEEDBACK new outcomes have arrived (a cheap count otherwise). The request returns at once.
+    ponytail: outcomes arriving during a running retrain wait for the next batch or the daily schedule."""
+    global retrain_thread
+    retrain_thread = threading.Thread(target=scheduled_tick, kwargs={"record_skip": record_skip, "min_new": min_new},
+                                           daemon=True, name="retrain")
+    retrain_thread.start()
 
 
 def utc_bar_time(value: Any) -> str | None:
@@ -167,3 +204,13 @@ def utc_bar_time(value: Any) -> str | None:
 @app.post("/v1/retrain")
 def retrain_now() -> dict[str, Any]:
     return run_retrain()
+
+
+@app.post("/v1/retrain/start", status_code=202)
+def retrain_start() -> dict[str, bool]:
+    """The app's Retrain now button: starts a retrain in the background on any new outcome (not only after 50) and
+    returns at once. The safety gate still decides whether the new model goes live. 409 if one is running."""
+    if RETRAIN_LOCK.locked():
+        raise HTTPException(status_code=409, detail="a retrain is already running")
+    start_auto_retrain(record_skip=True, min_new=1)
+    return {"started": True}

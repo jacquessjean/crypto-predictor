@@ -139,8 +139,8 @@ def simulate_exit(df: pd.DataFrame, buy_score, sell_score, buy_margin: float, se
     """A user following the Buy signals: one position per coin, sold after horizon_bars bars or, with early_exit, at the
     first Sell."""
     frame = df[["symbol", "open_time", "close"]].assign(buy=np.asarray(buy_score), sell=np.asarray(sell_score))
-    nets = []
-    for _, g in frame.sort_values("open_time").groupby("symbol", sort=False):
+    nets, details = [], []
+    for sym, g in frame.sort_values("open_time").groupby("symbol", sort=False):
         t, c = g["open_time"].to_numpy(), g["close"].to_numpy()
         buy, sell = g["buy"].to_numpy() > buy_margin, g["sell"].to_numpy() > sell_margin
         i = 0
@@ -163,13 +163,15 @@ def simulate_exit(df: pd.DataFrame, buy_score, sell_score, buy_margin: float, se
                 k = m if m < len(g) and t[m] == deadline else None
             if k is not None and not np.isnan(c[k]):
                 nets.append(c[k] / c[i] - 1 - FEE)
+                details.append({"symbol": sym, "entry_time": pd.Timestamp(t[i]), "exit_time": pd.Timestamp(t[k]),
+                                "entry": float(c[i]), "exit": float(c[k]), "net": nets[-1]})
                 i = k  # the position is closed at bar k; a new Buy can start there
             else:
                 i += 1  # exit bar missing: skip this trade
     nets = np.array(nets)
     out = {"trades": len(nets), "mean_net": float(nets.mean()) if len(nets) else float("nan"),
            "hit_rate": float((nets > 0).mean()) if len(nets) else float("nan")}
-    return {**out, "nets": nets} if with_trades else out  # per-trade results, e.g. for a bootstrap
+    return {**out, "nets": nets, "details": details} if with_trades else out  # per trade, e.g. for a bootstrap
 
 
 def horizon_return(df: pd.DataFrame, horizon_bars: int) -> pd.Series:
@@ -346,6 +348,13 @@ def _gate(live, new, val_b: pd.DataFrame, tolerance: float, baseline: float | No
             "baseline_log_loss": baseline}
 
 
+def new_feedback(store: "FeedbackStore", live_dir) -> int:
+    """Feedback samples received after the live model was trained (all of them for a model never retrained)."""
+    trained_on_path = Path(live_dir) / "trained_on.json"
+    trained_on = json.loads(trained_on_path.read_text()) if trained_on_path.exists() else {}
+    return store.count_since(trained_on.get("feedback_received_until"))
+
+
 def retrain(base_path, store: "FeedbackStore", live_dir, models_root, min_new: int = 50,
             tolerance: float = 0.0005) -> dict:
     """One online-learning step: retrain on the training data plus all feedback, gate it against the live model, and
@@ -353,8 +362,7 @@ def retrain(base_path, store: "FeedbackStore", live_dir, models_root, min_new: i
     live_dir, models_root = Path(live_dir), Path(models_root)
     trained_on_path = live_dir / "trained_on.json"
     trained_on = json.loads(trained_on_path.read_text()) if trained_on_path.exists() else {}
-    since = trained_on.get("feedback_received_until")
-    new = store.count_since(since)
+    new = new_feedback(store, live_dir)
     report = {"status": "skipped", "reason": "", "version": None, "new_samples": new}
     if new < min_new:
         return {**report, "reason": f"{new} new feedback samples, {min_new} needed"}

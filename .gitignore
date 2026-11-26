@@ -13,3 +13,5 @@ out/model/v[3-9]*/
 out/model/v[1-9][0-9]*/
 out/model/current.json
 out/model/feedback.db*
+report/*.py
+.playwright-mcp/

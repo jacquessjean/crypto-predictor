@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { friendlyError } from "./api.js";
-import { EXPLAIN, FEE_PCT, BAR_MS, WEAK_SIGNAL_NOTE, fmtPct, fmtPrice, fmtTime, minutesLeft, cap } from "./utils.js";
+import { EXPLAIN, FEE_PCT, BAR_MS, WEAK_SIGNAL_NOTE, fmtPct, fmtPrice, fmtRet, fmtTime, minutesLeft, retClass, cap } from "./utils.js";
 
 function Probs({ pred }) {
   const rows = [
@@ -43,6 +43,14 @@ function Prediction({ pred, watching, onWatch }) {
       <p className="explain">{EXPLAIN[pred.action]}</p>
       <Probs pred={pred} />
       <dl className="meta">
+        {pred.expected_net != null && pred.buy_margin != null && (
+          <>
+            <dt title={`The three probabilities weighted by how far prices typically move, minus the ${FEE_PCT}% fee`}>Expected return (after fee)</dt>
+            <dd className={retClass(pred.expected_net)}>{fmtRet(pred.expected_net)}</dd>
+            <dt title="A safety margin learned from past data: the model buys only above it">Needed for a Buy</dt>
+            <dd>{`above ${fmtRet(pred.buy_margin)}`}</dd>
+          </>
+        )}
         <dt>Price at signal</dt><dd>{fmtPrice(pred.entry_price)}</dd>
         <dt>Advice expires</dt><Expiry expiresAt={expiresAt} />
         <dt>Model</dt><dd>{pred.model_version}</dd>

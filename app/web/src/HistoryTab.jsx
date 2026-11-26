@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getPredictions, getStats, friendlyError } from "./api.js";
+import { getModel, getPredictions, getStats, postRetrain, friendlyError } from "./api.js";
 import {
   BAR_MS, FEE_PCT, STATUS_LABEL, fmtDateTime, fmtPrice, fmtRet, retClass, cap,
 } from "./utils.js";
@@ -36,13 +36,62 @@ function Stats({ s }) {
   );
 }
 
+const RETRAIN_LABEL = { promoted: "Promoted", rejected: "Rejected", skipped: "Skipped", error: "Failed" };
+const RETRAIN_NOTE = { promoted: "now live", rejected: "kept the live model", skipped: "kept the live model", error: "kept the live model" };
+
+/* Online learning: every resolved prediction is sent back to the model service as a new training sample;
+ * it retrains once a day and switches to the new version only if it passes the safety gate. */
+function ModelStatus({ m, error, onRetrain, retrainMsg }) {
+  if (error) return <p className="muted small">{`Model status unavailable: ${error}`}</p>;
+  if (!m) return null;
+  const r = m.last_retrain;
+  return (
+    <div className="stats model-status" aria-label="Model and online learning">
+      <Stat label="Live model" value={m.model_version} sub={`${m.horizon_minutes}-minute horizon`} />
+      <Stat label="Sent back for learning" value={String(m.feedback_samples)}
+            sub={`${Math.min(m.new_feedback, m.min_new_feedback)} of ${m.min_new_feedback} new needed for the next retrain`} />
+      <Stat
+        label={m.retraining ? "Retrain" : "Last retrain"}
+        value={m.retraining ? "Running…" : r ? (RETRAIN_LABEL[r.status] || r.status) : "None yet"}
+        sub={m.retraining ? `about a minute; ${m.model_version} keeps answering meanwhile` : r ? [r.status === "promoted" && r.version ? `${r.version} ${RETRAIN_NOTE.promoted}` : RETRAIN_NOTE[r.status],
+                  r.at && fmtDateTime(Date.parse(r.at)), r.reason].filter(Boolean).join(", ")
+               : `starts by itself after ${m.min_new_feedback} new outcomes`}
+      />
+      <div className="model-actions">
+        <p className="muted small">The model retrains by itself once enough new outcomes arrive. A new version goes live only if it is not worse than the current model on held-out data.</p>
+        <button onClick={onRetrain} disabled={m.retraining || m.new_feedback === 0}
+                title={m.new_feedback === 0 ? "No new outcomes since the live model was trained" : "Retrain now on the new outcomes; the safety gate still decides"}>
+          Retrain now
+        </button>
+        {retrainMsg && <p className="muted small">{retrainMsg}</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function HistoryTab({ pairs }) {
   const [pair, setPair] = useState("");
   const [stats, setStats] = useState(null);
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
+  const [model, setModel] = useState(null);
+  const [modelError, setModelError] = useState("");
+  const [retrainMsg, setRetrainMsg] = useState("");
+
+  async function onRetrain() {
+    setRetrainMsg("");
+    try {
+      await postRetrain();
+      setModel(await getModel());               // shows Running… and starts the 5-second checks
+    } catch (err) {
+      setRetrainMsg(err.status === 409 ? "A retrain is already running." : friendlyError(err).detail);
+    }
+  }
 
   const load = useCallback(async () => {
+    getModel()                                    // separate, so a model-service hiccup never hides the history
+      .then((m) => { setModel(m); setModelError(""); })
+      .catch((err) => setModelError(friendlyError(err).detail));
     try {
       const [s, r] = await Promise.all([getStats(), getPredictions(pair)]);
       setStats(s);
@@ -53,6 +102,14 @@ export default function HistoryTab({ pairs }) {
     }
   }, [pair]);
 
+  // while a retrain runs, check the model every 5 s so the card switches to the new version by itself
+  const retraining = model?.retraining;
+  useEffect(() => {
+    if (!retraining) return;
+    const id = setInterval(() => { getModel().then(setModel).catch(() => {}); }, 5000);
+    return () => clearInterval(id);
+  }, [retraining]);
+
   useEffect(() => {
     load();
     const id = setInterval(() => { if (!document.hidden) load(); }, 30000);
@@ -61,6 +118,7 @@ export default function HistoryTab({ pairs }) {
 
   return (
     <section role="tabpanel" aria-labelledby="tab-history">
+      <ModelStatus m={model} error={modelError} onRetrain={onRetrain} retrainMsg={retrainMsg} />
       {stats && <Stats s={stats} />}
       <div className="controls">
         <label htmlFor="history-pair">Show</label>
@@ -93,7 +151,10 @@ export default function HistoryTab({ pairs }) {
                 <td className={`num ${p.action === "WAIT" ? "" : retClass(p.net_return)}`}>
                   {p.action === "WAIT" ? "—" : fmtRet(p.net_return)}
                 </td>
-                <td><span className={`badge ${p.status}`}>{STATUS_LABEL[p.status] || p.status}</span></td>
+                <td>
+                  <span className={`badge ${p.status}`}>{STATUS_LABEL[p.status] || p.status}</span>
+                  {p.source === "replay" && <span className="badge replay" title="Made afterwards for this past bar, from the data available when it closed">replay</span>}
+                </td>
               </tr>
             ))}
           </tbody>

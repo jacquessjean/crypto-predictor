@@ -68,6 +68,13 @@ def init_db(db_path: str | None = None) -> None:
         # Online learning: whether this resolved prediction was sent back to the model service as a labeled sample.
         if "feedback_sent" not in columns:
             conn.execute("ALTER TABLE predictions ADD COLUMN feedback_sent INTEGER NOT NULL DEFAULT 0")
+        # 'live' (a user asked) or 'replay' (made afterwards for a past bar by app/api/replay.py)
+        if "source" not in columns:
+            conn.execute("ALTER TABLE predictions ADD COLUMN source TEXT NOT NULL DEFAULT 'live'")
+        # how close the prediction came to a Buy: expected return after the fee, and the margin it had to exceed
+        for column in ("expected_net", "buy_margin"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE predictions ADD COLUMN {column} REAL")
         # WAIT is not a trade, so it has no right/wrong outcome (older rows were marked 'incorrect').
         conn.execute(
             "UPDATE predictions SET status = 'neutral' WHERE action = 'WAIT' AND status != 'pending'"
@@ -92,7 +99,7 @@ def get_prediction_by_bar(
 
 
 def insert_prediction(record: dict, db_path: str | None = None) -> dict:
-    record = {"features_json": None, **record}
+    record = {"features_json": None, "source": "live", "expected_net": None, "buy_margin": None, **record}
     with get_conn(db_path) as conn:
         try:
             cursor = conn.execute(
@@ -100,11 +107,11 @@ def insert_prediction(record: dict, db_path: str | None = None) -> dict:
                 INSERT INTO predictions (
                     pair, request_time, bar_time, bar_close_ms,
                     expires_at, expires_at_ms, p_up, p_flat, p_down,
-                    action, entry_price, model_version, schema_version, features_json, status
+                    action, entry_price, model_version, schema_version, features_json, source, expected_net, buy_margin, status
                 ) VALUES (
                     :pair, :request_time, :bar_time, :bar_close_ms,
                     :expires_at, :expires_at_ms, :p_up, :p_flat, :p_down,
-                    :action, :entry_price, :model_version, :schema_version, :features_json, 'pending'
+                    :action, :entry_price, :model_version, :schema_version, :features_json, :source, :expected_net, :buy_margin, 'pending'
                 )
                 """,
                 record,
@@ -204,9 +211,11 @@ def get_unsent_feedback(limit: int = 500, db_path: str | None = None) -> list[di
         return [dict(r) for r in rows]
 
 
-def mark_feedback_sent(prediction_ids: list[int], db_path: str | None = None) -> None:
+def mark_feedback_sent(prediction_ids: list[int], db_path: str | None = None, rejected: bool = False) -> None:
+    """1: the model service has the sample. -1 (rejected): it refused it as malformed, so it is never sent again."""
     with get_conn(db_path) as conn:
-        conn.executemany("UPDATE predictions SET feedback_sent = 1 WHERE id = ?", [(i,) for i in prediction_ids])
+        conn.executemany("UPDATE predictions SET feedback_sent = ? WHERE id = ?",
+                         [(-1 if rejected else 1, i) for i in prediction_ids])
 
 
 def get_stats(db_path: str | None = None) -> dict:

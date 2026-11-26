@@ -15,7 +15,7 @@ BASE, ROOT, _ = setup(TMP)
 _saved_env = dict(os.environ)
 os.environ.update({"MODELS_ROOT": str(ROOT), "MODEL_DIR": str(ROOT / "v2"), "BASE_DATA": str(TMP / "features.parquet"),
                    "RETRAIN_INTERVAL_HOURS": "0", "MIN_NEW_FEEDBACK": "50",
-                   "GATE_TOLERANCE": "1.0"})  # the gate itself is tested in test_online.py; here: promotion and hot swap
+                   "GATE_TOLERANCE": "1.0", "AUTO_RETRAIN": "0"})  # automatic retraining is switched on in its own tests below  # the gate itself is tested in test_online.py; here: promotion and hot swap
 # a private copy of the service under its own name, so this temporary model never leaks into test_model_service
 _spec = importlib.util.spec_from_file_location(
     "model_service_online_test", Path(__file__).resolve().parents[1] / "service" / "model_service.py")
@@ -48,6 +48,14 @@ def test_retrain_promotes_and_hot_swaps():
     assert out["model_version"] == "v3" and out["action"] in {"BUY", "SELL", "WAIT"}
 
 
+def test_a_restart_still_reports_the_last_promotion():
+    # runs after the promotion above; a restart empties the in-memory report, the live version's record refills it
+    model_service.last_retrain.clear()
+    model_service.load_live()  # what start-up does
+    last = client.get("/health").json()["last_retrain"]
+    assert last["status"] == "promoted" and last["version"] == "v3" and last["at"], last
+
+
 def test_second_retrain_at_once_is_refused():
     with model_service.RETRAIN_LOCK:
         response = client.post("/v1/retrain")
@@ -73,6 +81,61 @@ def test_a_failing_retrain_is_reported_and_does_not_stop_the_schedule():
         assert last["status"] == "error" and "training data missing" in last["reason"]
     finally:
         model_service.retrain = original
+
+
+def test_enough_new_outcomes_start_a_retrain_by_themselves():
+    model_service.AUTO_RETRAIN = True
+    try:
+        assert client.post("/v1/feedback", json={"samples": samples(BASE, 60, offset=800)}).json()["accepted"] == 60
+        model_service.retrain_thread.join(timeout=300)  # runs in the background; the request returned at once
+        health = client.get("/health").json()
+        assert health["model_version"] == "v4" and health["last_retrain"]["status"] == "promoted", health
+        assert health["retraining"] is False and health["new_feedback"] == 0
+    finally:
+        model_service.AUTO_RETRAIN = False
+
+
+def test_a_few_outcomes_count_toward_the_next_retrain_without_hiding_the_last_one():
+    model_service.AUTO_RETRAIN = True
+    try:
+        client.post("/v1/feedback", json={"samples": samples(BASE, 3, offset=900)})
+        model_service.retrain_thread.join(timeout=300)
+        health = client.get("/health").json()
+        assert health["new_feedback"] == 3 and health["min_new_feedback"] == 50
+        assert health["model_version"] == "v4" and health["last_retrain"]["status"] == "promoted", health
+    finally:
+        model_service.AUTO_RETRAIN = False
+
+
+def test_health_says_when_a_retrain_is_running():
+    with model_service.RETRAIN_LOCK:
+        assert client.get("/health").json()["retraining"] is True
+    assert client.get("/health").json()["retraining"] is False
+
+
+def test_a_forced_retrain_starts_in_the_background_and_is_logged():
+    import logging
+
+    lines = []
+    handler = logging.Handler()
+    handler.emit = lambda record: lines.append(record.getMessage())
+    model_service.logger.addHandler(handler)
+    try:
+        assert client.get("/health").json()["new_feedback"] == 3  # below the 50 a normal retrain needs
+        response = client.post("/v1/retrain/start")
+        assert response.status_code == 202 and response.json() == {"started": True}
+        model_service.retrain_thread.join(timeout=300)
+        health = client.get("/health").json()
+        assert health["model_version"] == "v5" and health["last_retrain"]["status"] == "promoted", health
+        assert any("retrain started" in line and "3 new outcomes" in line for line in lines), lines
+        assert any("promoted v5" in line for line in lines), lines
+    finally:
+        model_service.logger.removeHandler(handler)
+
+
+def test_a_forced_retrain_is_refused_while_one_runs():
+    with model_service.RETRAIN_LOCK:
+        assert client.post("/v1/retrain/start").status_code == 409
 
 
 if __name__ == "__main__":

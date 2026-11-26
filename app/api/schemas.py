@@ -33,6 +33,9 @@ class PredictionResponse(BaseModel):
     realized_return: float | None = None
     net_return: float | None = None
     resolved_at: str | None = None
+    source: Literal["live", "replay"] = "live"
+    expected_net: float | None = None  # expected return of buying, after the fee
+    buy_margin: float | None = None    # Buy only when expected_net is above this learned margin
 
 
 class CandleItem(BaseModel):
@@ -62,3 +65,19 @@ class StatsResponse(BaseModel):
     signal_win_rate: float | None
     signal_avg_net_return: float | None
     by_action: list[ActionStats]
+
+class RetrainReport(BaseModel):
+    status: str
+    reason: str | None = None
+    version: str | None = None
+    at: str | None = None
+
+
+class ModelStatusResponse(BaseModel):
+    model_version: str
+    horizon_minutes: int
+    feedback_samples: int
+    new_feedback: int = 0
+    min_new_feedback: int = 50
+    retraining: bool = False
+    last_retrain: RetrainReport | None

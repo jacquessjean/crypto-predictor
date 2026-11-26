@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from .binance import BinanceRestError, fetch_close_at
 from .config import ROUND_TRIP_FEE
 from .db import get_due_pending_predictions, get_unsent_feedback, mark_feedback_sent, update_prediction_outcome
-from .model_client import ModelServiceError, send_feedback
+from .model_client import FeedbackRejected, ModelServiceError, send_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,28 @@ def send_pending_feedback() -> int:
                 "realized_return": float(r["realized_return"])} for r in rows]
     try:
         send_feedback(samples)
+    except FeedbackRejected:
+        return _send_one_by_one(rows, samples)  # one bad sample must not block the rest forever
     except ModelServiceError as exc:
         logger.warning("Feedback not sent (will retry): %s", exc)
         return 0
     mark_feedback_sent([int(r["id"]) for r in rows])
     return len(rows)
+
+
+def _send_one_by_one(rows: list[dict], samples: list[dict]) -> int:
+    """After the service refused a batch: send each sample alone, set aside the ones it refuses."""
+    sent = 0
+    for row, sample in zip(rows, samples):
+        try:
+            send_feedback([sample])
+        except FeedbackRejected as exc:
+            logger.warning("Feedback for prediction %s refused, not sent again: %s", row["id"], exc)
+            mark_feedback_sent([int(row["id"])], rejected=True)
+            continue
+        except ModelServiceError as exc:
+            logger.warning("Feedback not sent (will retry): %s", exc)
+            break
+        mark_feedback_sent([int(row["id"])])
+        sent += 1
+    return sent

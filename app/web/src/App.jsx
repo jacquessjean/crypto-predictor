@@ -5,6 +5,7 @@ import Chart from "./Chart.jsx";
 import ResultCard from "./ResultCard.jsx";
 import WatchCard from "./WatchCard.jsx";
 import HistoryTab from "./HistoryTab.jsx";
+import BacktestTab from "./BacktestTab.jsx";
 
 function loadSavedPair() {
   try { return localStorage.getItem("pair"); } catch (_) { return null; }   // storage may be unavailable
@@ -131,7 +132,7 @@ export default function App() {
           Crypto Predictor
         </h1>
         <nav className="tabs" role="tablist" aria-label="Sections">
-          {["predict", "history"].map((name) => (
+          {["predict", "history", "signals"].map((name) => (
             <button
               key={name}
               role="tab"
@@ -139,7 +140,7 @@ export default function App() {
               aria-selected={tab === name}
               onClick={() => setTab(name)}
             >
-              {name === "predict" ? "Predict" : "History"}
+              {{ predict: "Predict", history: "History", signals: "Past signals" }[name]}
             </button>
           ))}
         </nav>
@@ -176,6 +177,7 @@ export default function App() {
         )}
 
         {tab === "history" && <HistoryTab pairs={pairs} />}
+        {tab === "signals" && <BacktestTab />}
       </main>
 
       <footer>Educational project. Not financial advice.</footer>

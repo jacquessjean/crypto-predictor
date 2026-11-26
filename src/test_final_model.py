@@ -84,6 +84,17 @@ def test_simulate_exit_horizon():
     assert len(nets) == 1 and math.isclose(nets[0], 102 / 100 - 1 - FEE)
 
 
+def test_simulate_exit_lists_each_trade():
+    df = pd.DataFrame({"symbol": "BTCUSDT", "open_time": pd.date_range("2025-03-01", periods=8, freq="15min"),
+                       "close": [100.0, 101, 102, 103, 104, 105, 106, 107]})
+    buy = np.array([1.0, 0, 1, 0, 0, 0, 0, 0])  # the second Buy fires at the first trade's exit bar
+    out = simulate_exit(df, buy, np.zeros(8), 0.5, 0.5, early_exit=False, horizon_bars=2, with_trades=True)
+    assert [(t["symbol"], str(t["entry_time"]), str(t["exit_time"]), t["entry"], t["exit"]) for t in out["details"]] == [
+        ("BTCUSDT", "2025-03-01 00:00:00", "2025-03-01 00:30:00", 100.0, 102.0),
+        ("BTCUSDT", "2025-03-01 00:30:00", "2025-03-01 01:00:00", 102.0, 104.0)]
+    assert np.allclose([t["net"] for t in out["details"]], out["nets"])
+
+
 def test_tune_margin_trades_respects_min_trades():
     df = pd.DataFrame({"symbol": "BTCUSDT", "open_time": pd.date_range("2025-03-01", periods=400, freq="15min"),
                        "close": 100 + np.sin(np.arange(400) / 5)})

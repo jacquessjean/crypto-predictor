@@ -132,6 +132,8 @@ dl.meta dd { margin: 0; text-align: right; font-weight: 600; }
 .stat .label { color: var(--muted); font-size: .82rem; }
 .stat .value { font: 700 1.9rem "Unbounded Variable", sans-serif; letter-spacing: -.03em; margin: 6px 0 2px; }
 .stat .sub { color: var(--muted); font-size: .8rem; }
+.model-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; padding: 12px 22px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.model-actions p { margin: 0; flex: 1; }
 .stats > p { grid-column: 1 / -1; margin: 0; padding: 12px 22px; border-top: 1px solid var(--line); }
 .pos { color: var(--up); } .neg { color: var(--down); }
 .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 26px 8px 26px 8px; backdrop-filter: blur(18px); }
@@ -149,3 +151,4 @@ td.act-WAIT { color: var(--wait); } td.act-WAIT::before { width: 10px; height: 3
 .badge.correct { background: var(--up-soft); color: var(--up); }
 .badge.incorrect { background: var(--down-soft); color: var(--down); }
 .badge.flat, .badge.neutral { background: var(--wait-soft); color: var(--wait); }
+.badge.replay { margin-left: 6px; background: transparent; border: 1px solid var(--line); font-weight: 500; }

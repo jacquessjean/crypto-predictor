@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from final_model import FEATURES, MODEL_DIR, apply_scaler, load_artifact, load_splits
+from final_model import FEATURES, MODEL_DIR, apply_scaler, expected_net, load_artifact, load_splits
 
 os.environ.setdefault("MODEL_DIR", str(MODEL_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "service"))
@@ -41,6 +41,21 @@ def test_predict_matches_artifact():
     model, scaler, _, _ = load_artifact(MODEL_DIR)
     p = dict(zip(model.classes_, model.predict_proba(apply_scaler(pd.DataFrame([row]), scaler))[0]))
     assert np.allclose([out["p_up"], out["p_flat"], out["p_down"]], [p[1], p[-1], p[0]], atol=1e-12)
+
+
+def test_predict_explains_how_close_it_came_to_a_buy():
+    client = _client()
+    if client is None:
+        return
+    model, scaler, _, decision = load_artifact(MODEL_DIR)
+    rows = load_splits()["val_b"].iloc[:300]
+    for _, row in rows.iterrows():
+        out = client.post("/v1/predict", json={"features": {f: float(row[f]) for f in FEATURES}}).json()
+        proba = model.predict_proba(apply_scaler(pd.DataFrame([row]), scaler))
+        expected = expected_net(proba, list(model.classes_), decision["means"], "buy")[0]
+        assert math.isclose(out["expected_net"], expected, abs_tol=1e-12)  # expected return of buying now, after the fee
+        assert out["buy_margin"] == decision["buy_margin"]  # the learned bar it must clear
+        assert (out["action"] == "BUY") == (out["expected_net"] > out["buy_margin"])
 
 
 def test_missing_and_nonfinite_features_are_rejected():

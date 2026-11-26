@@ -22,10 +22,11 @@ from .db import (
     insert_prediction,
 )
 from .features_live import LiveFeatureError, build_live_feature_row
-from .model_client import ModelServiceError, predict_from_features
+from .model_client import ModelServiceError, RetrainRunning, get_model_status, predict_from_features, start_retrain
 from .resolver import resolve_pending_predictions
 from .schemas import (
     CandleItem,
+    ModelStatusResponse,
     PredictionResponse,
     PredictRequest,
     StatsResponse,
@@ -156,6 +157,8 @@ def post_predict(body: PredictRequest) -> dict:
         "schema_version": model_out["schema_version"],
         # kept so resolved predictions can later be used as new training samples
         "features_json": json.dumps(features),
+        "expected_net": model_out.get("expected_net"),
+        "buy_margin": model_out.get("buy_margin"),
     }
     return insert_prediction(record)
 
@@ -176,8 +179,39 @@ def get_prediction_stats() -> dict:
     return get_stats()
 
 
+BACKTEST = Path(__file__).resolve().parent / "data" / "backtest.json"  # v2's November trades, computed from the saved artifact
+
+
+@app.get("/api/backtest")
+def get_backtest() -> dict:
+    """Model v2's Buy trades on November 2026, data no choice had seen: one position per coin, sold after one hour."""
+    return json.loads(BACKTEST.read_text())
+
+
+@app.post("/api/model/retrain")
+def post_model_retrain() -> dict:
+    """The Retrain now button: starts a retrain in the background on the outcomes received so far. The model service's
+    safety gate still decides whether the new version goes live. 409 while one is running.
+    ponytail: no login, so anyone who can open the app can press it; one retrain at a time bounds the cost."""
+    try:
+        return {"started": start_retrain()}
+    except RetrainRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/model", response_model=ModelStatusResponse)
+def get_model() -> dict:
+    """The live model version and its online learning: feedback received and the last retrain (read-only)."""
+    try:
+        return get_model_status()
+    except ModelServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 # Serve the web client from the same origin so `uvicorn` alone gives a working app. This mount is
 # registered last so it never shadows /api/*. Behind nginx (Docker) the same folder is served by nginx.
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"  # the React build (npm run build), never its source
 if WEB_DIR.is_dir():
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

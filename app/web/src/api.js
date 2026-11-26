@@ -41,6 +41,9 @@ export const getCandles = (pair, limit) =>
   api(`/candles?pair=${encodeURIComponent(pair)}&interval=15m&limit=${limit}`);
 export const postPredict = (pair) => api("/predict", { method: "POST", body: JSON.stringify({ pair }) });
 export const getStats = () => api("/stats");
+export const getModel = () => api("/model");
+export const postRetrain = () => api("/model/retrain", { method: "POST" });
+export const getBacktest = () => api("/backtest");
 export const getPredictions = (pair) =>
   api(`/predictions?limit=100${pair ? `&pair=${encodeURIComponent(pair)}` : ""}`);
 

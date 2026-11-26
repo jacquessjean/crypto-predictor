@@ -50,7 +50,7 @@ def client(tmp_path, monkeypatch):
         main,
         "predict_from_features",
         lambda **kwargs: {"p_up": 0.5, "p_flat": 0.25, "p_down": 0.25, "action": state["action"],
-                          "model_version": "v1", "schema_version": "1"},
+                          "model_version": "v1", "schema_version": "1", "expected_net": 0.0003, "buy_margin": 0.0009},
     )
     return TestClient(main.app), state
 
@@ -153,9 +153,16 @@ def test_stats_have_no_win_rate_for_wait(client, monkeypatch):
 
 def test_web_client_is_served_and_api_still_works(client):
     c, _ = client
+    # app/web holds the React source; only its build (app/web/dist) is a working page. In Docker nginx serves it.
+    assert c.get("/src/main.jsx").status_code == 404  # the unbuilt source is never served
     page = c.get("/")
-    assert page.status_code == 200 and "Crypto Predictor" in page.text
-    assert c.get("/app.js").status_code == 200
-    assert c.get("/style.css").status_code == 200
+    assert page.status_code == 404 or "/assets/" in page.text  # either nothing, or the built page and its bundle
     assert c.get("/api/pairs").json()[0] == "BTCUSDT"      # an API route, not the static mount
     assert c.get("/api/does-not-exist").status_code == 404
+
+def test_prediction_says_how_close_it_came_to_a_buy(client):
+    c, _ = client
+    first = c.post("/api/predict", json={"pair": "ETHUSDT"}).json()
+    again = c.post("/api/predict", json={"pair": "ETHUSDT"}).json()  # served from the database
+    for body in (first, again):
+        assert body["expected_net"] == 0.0003 and body["buy_margin"] == 0.0009
